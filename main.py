@@ -51,15 +51,26 @@ class Orchestrator:
         self.ui.update_ui("Status: Analyzing Audio Stems...")
         features_json = analyze_stem_features(file_path)
         
+        # Check for analysis errors
+        import json
+        features_dict = json.loads(features_json)
+        if features_dict.get("status") == "error":
+            error_msg = features_dict.get("error_message", "Unknown error")
+            self.ui.update_ui("Status: Analysis Failed.", f"Error: {error_msg}", "")
+            return
+        
         # 2. The Brain (Hermes Agent)
         track_name = file_path.split("/")[-1].replace(".wav", "")
         self.ui.update_ui("Status: Hermes Reasoning (Connecting to Ollama)...")
         
-        decision = self.agent.evaluate_features(features_json, track_name)
+        # Retrieve Procedural Memory
+        past_contexts = self.vector_memory.retrieve_similar_contexts(features_json)
+        
+        decision = self.agent.evaluate_features(features_json, track_name, past_contexts)
         
         self.pending_reasoning = decision.get("reasoning", "")
         self.pending_action = decision.get("action")
-        self.current_context_hash = f"{track_name}_hash"
+        self.pending_features_json = features_json
         
         if self.pending_action:
             action_type = self.pending_action.get("type")
@@ -86,33 +97,20 @@ class Orchestrator:
         self.ui.update_ui("Status: Executing Action in Logic Pro...", self.pending_reasoning, "Approved")
         
         # Execute via Logic Pro Adapter
-        if action_type == "bounce_stems":
-            self.daw_adapter.bounce_stems(params.get("track_names", []), params.get("output_dir", ""))
-        elif action_type == "set_volume":
-            self.daw_adapter.set_volume(target, params.get("level_db", 0.0))
-        elif action_type == "set_mute":
-            self.daw_adapter.set_mute(target, params.get("is_muted", True))
-        elif action_type == "set_solo":
-            self.daw_adapter.set_solo(target, params.get("is_soloed", True))
-        elif action_type == "set_pan":
-            self.daw_adapter.set_pan(target, params.get("pan_value", 0))
-        elif action_type == "set_eq_band":
-            self.daw_adapter.set_eq_band(target, params.get("band_index", 1), params.get("freq", 1000.0), params.get("gain", 0.0), params.get("q", 1.0))
-        elif action_type == "set_high_pass_filter":
-            self.daw_adapter.set_high_pass_filter(target, params.get("freq", 80.0))
-        elif action_type == "set_compressor_threshold":
-            self.daw_adapter.set_compressor_threshold(target, params.get("threshold_db", -20.0))
-        elif action_type == "set_compressor_ratio":
-            self.daw_adapter.set_compressor_ratio(target, params.get("ratio", 4.0))
-        elif action_type == "set_compressor_attack":
-            self.daw_adapter.set_compressor_attack(target, params.get("attack_ms", 10.0))
-        elif action_type == "set_compressor_release":
-            self.daw_adapter.set_compressor_release(target, params.get("release_ms", 100.0))
-        elif action_type == "set_send_level":
-            self.daw_adapter.set_send_level(target, params.get("bus_index", 1), params.get("level_db", -6.0))
+        method = getattr(self.daw_adapter, action_type, None)
+        if method:
+            try:
+                if action_type == "bounce_stems":
+                    method(**params)
+                else:
+                    method(track_name=target, **params)
+            except TypeError as e:
+                print(f"Orchestrator: Parameter mismatch for '{action_type}' - {e}")
+        else:
+            print(f"Orchestrator: Unknown action type '{action_type}'")
             
         # Log success and update vector memory
-        self.vector_memory.store_delta(self.current_context_hash, self.pending_action, self.pending_action)
+        self.vector_memory.store_delta(self.pending_features_json, self.pending_action, self.pending_action)
         self.ui.update_ui("Status: Done.", "Action executed successfully.", "")
         self.pending_action = None
 

@@ -39,10 +39,11 @@ class FloatingPopup:
         self.action_label.pack(pady=5)
 
     def update_ui(self, status: str, reasoning: str = "", action_summary: str = ""):
-        self.status_label.config(text=status)
-        self.reasoning_text.config(text=reasoning)
-        self.action_label.config(text=action_summary)
-        self.root.update()
+        def _update():
+            self.status_label.config(text=status)
+            self.reasoning_text.config(text=reasoning)
+            self.action_label.config(text=action_summary)
+        self.root.after(0, _update)
 
     def mainloop(self):
         self.root.mainloop()

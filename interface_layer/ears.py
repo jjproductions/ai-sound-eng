@@ -5,11 +5,18 @@ import librosa
 from pydantic import BaseModel, Field
 from typing import Optional
 
+try:
+    import pyloudnorm as pyln
+    HAS_PYLOUDNORM = True
+except ImportError:
+    HAS_PYLOUDNORM = False
+
 class AudioFeatures(BaseModel):
     lufs_integrated: float = Field(..., description="Integrated perceived loudness in LUFS")
     rms_mean: float = Field(..., description="Mean Root-Mean-Square value of amplitude")
     spectral_centroid_mean_hz: float = Field(..., description="Mean spectral centroid in Hertz")
     peak_amplitude_dbfs: float = Field(..., description="Peak amplitude in dB relative to full scale (dBFS)")
+    crest_factor: float = Field(..., description="Crest factor (Peak to RMS ratio)")
     stereo_correlation_mean: Optional[float] = Field(None, description="Mean stereo phase correlation (-1.0 to 1.0), null if mono")
 
 class AnalysisResponse(BaseModel):
@@ -70,6 +77,9 @@ def analyze_stem_features(file_path: str) -> str:
         else:
             peak_dbfs = -100.0
             
+        # Compute crest factor
+        crest_factor = float(peak_amp / rms_mean) if rms_mean > 1e-10 else 1.0
+            
         # Compute stereo correlation
         stereo_corr = None
         if y.ndim > 1 and y.shape[0] >= 2:
@@ -97,18 +107,26 @@ def analyze_stem_features(file_path: str) -> str:
             
         # Compute perceived loudness (LUFS) using pyloudnorm
         lufs_integrated = None
-        try:
-            import pyloudnorm as pyln
-            # pyloudnorm expects (samples, channels) shape. 
-            # librosa loads stereo as (channels, samples).
-            if y.ndim > 1:
-                y_loudness = y.T
-            else:
-                y_loudness = y
+        if HAS_PYLOUDNORM:
+            try:
+                # pyloudnorm expects sr >= 16000. If not, resample.
+                if sr < 16000 or sr > 192000:
+                    target_sr = 44100
+                    y_loudness = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+                    sr_loudness = target_sr
+                else:
+                    y_loudness = y
+                    sr_loudness = sr
+                    
+                if y_loudness.ndim > 1:
+                    y_loudness = y_loudness.T
+                    
+                meter = pyln.Meter(sr_loudness)
+                lufs_integrated = float(meter.integrated_loudness(y_loudness))
+            except Exception:
+                pass
                 
-            meter = pyln.Meter(sr)
-            lufs_integrated = float(meter.integrated_loudness(y_loudness))
-        except Exception:
+        if lufs_integrated is None:
             # Fallback approximation: K-weighted RMS to LUFS approximation
             rms_dbfs = 20 * np.log10(rms_mean) if rms_mean > 0 else -100.0
             lufs_integrated = float(rms_dbfs - 0.6)
@@ -119,6 +137,7 @@ def analyze_stem_features(file_path: str) -> str:
             rms_mean=rms_mean,
             spectral_centroid_mean_hz=spectral_centroid_mean,
             peak_amplitude_dbfs=peak_dbfs,
+            crest_factor=crest_factor,
             stereo_correlation_mean=stereo_corr
         )
         
@@ -143,13 +162,15 @@ def analyze_stem_features(file_path: str) -> str:
         
     return response.model_dump_json()
 
-def analyze_stem_clash(file_path_1: str, file_path_2: str) -> str:
+def analyze_stem_clash(file_path_1: str, file_path_2: str, corr_thresh: float = 0.3, mask_thresh: float = 0.15) -> str:
     """Loads two .wav files, computes cross-correlation and frequency masking
     (especially in low frequencies), and returns a validated JSON string.
     
     Args:
         file_path_1 (str): Absolute path to the first audio file.
         file_path_2 (str): Absolute path to the second audio file.
+        corr_thresh (float): Threshold for envelope correlation.
+        mask_thresh (float): Threshold for low frequency masking.
         
     Returns:
         str: A validated JSON string matching the clash response schema.
@@ -230,7 +251,7 @@ def analyze_stem_clash(file_path_1: str, file_path_2: str) -> str:
             low_freq_masking_index = 0.0
             
         # 3. Clash Detection Logic
-        clash_detected = envelope_corr > 0.3 and low_freq_masking_index > 0.15
+        clash_detected = envelope_corr > corr_thresh and low_freq_masking_index > mask_thresh
         
         clash_features = ClashFeatures(
             overall_cross_correlation=envelope_corr,

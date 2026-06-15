@@ -41,6 +41,7 @@ class TestAudioAnalysis(unittest.TestCase):
         self.assertIn("rms_mean", features)
         self.assertIn("spectral_centroid_mean_hz", features)
         self.assertIn("peak_amplitude_dbfs", features)
+        self.assertIn("crest_factor", features)
         self.assertIn("stereo_correlation_mean", features)
         
         # Verify peak amplitude is close to -6.02 dBFS (20 * log10(0.5))

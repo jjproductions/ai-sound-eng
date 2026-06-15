@@ -48,21 +48,20 @@ class MidiListener:
                 break
                 
         try:
-            # open_input blocks waiting for messages in iteration
+            import time
             with mido.open_input(target_port) as inport:
                 print(f"MidiListener: Started listening on {target_port}")
-                for msg in inport:
-                    if not self.running:
-                        break
-                    
-                    # We only care about CC messages based on requirements
-                    if msg.type == 'control_change':
-                        # Check against mapped actions
-                        for action_name, cc_num in self.config.items():
-                            if msg.control == cc_num:
-                                if action_name in self.callbacks:
-                                    print(f"MidiListener: Triggering callback for '{action_name}'")
-                                    self.callbacks[action_name]()
+                while self.running:
+                    for msg in inport.iter_pending():
+                        # We only care about CC messages based on requirements
+                        if msg.type == 'control_change':
+                            # Check against mapped actions
+                            for action_name, cc_num in self.config.items():
+                                if msg.control == cc_num:
+                                    if action_name in self.callbacks:
+                                        print(f"MidiListener: Triggering callback for '{action_name}'")
+                                        self.callbacks[action_name]()
+                    time.sleep(0.01)
         except Exception as e:
             print(f"MidiListener Error: {e}")
 
