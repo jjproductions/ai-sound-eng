@@ -1,0 +1,9 @@
+librosa
+pydantic>=2.0
+pyloudnorm
+soundfile
+numpy
+mido
+python-rtmidi
+qdrant-client
+pytest
